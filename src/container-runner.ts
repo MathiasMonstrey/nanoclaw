@@ -122,6 +122,12 @@ function buildVolumeMounts(
     '.claude',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
+  // Must be world-writable: container runs as node (uid 1000), host may be root.
+  // Claude Code creates arbitrary subdirs (projects/, session-env/, etc.) at runtime.
+  fs.chmodSync(groupSessionsDir, 0o777);
+  const debugDir = path.join(groupSessionsDir, 'debug');
+  fs.mkdirSync(debugDir, { recursive: true });
+  fs.chmodSync(debugDir, 0o777);
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
     fs.writeFileSync(
@@ -163,12 +169,24 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Mount per-group .claude.json (holds MCP server config keyed by project path)
+  const claudeJsonFile = path.join(DATA_DIR, 'sessions', group.folder, 'claude.json');
+  if (fs.existsSync(claudeJsonFile)) {
+    mounts.push({
+      hostPath: claudeJsonFile,
+      containerPath: '/home/node/.claude.json',
+      readonly: false,
+    });
+  }
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
-  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
+  for (const sub of ['messages', 'tasks', 'input']) {
+    const dir = path.join(groupIpcDir, sub);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.chmodSync(dir, 0o777);
+  }
   mounts.push({
     hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',

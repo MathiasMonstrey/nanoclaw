@@ -38,6 +38,7 @@ import {
   initDatabase,
   setRegisteredGroup,
   setRouterState,
+  deleteSession,
   setSession,
   storeChatMetadata,
   storeMessage,
@@ -294,10 +295,10 @@ async function runAgent(
     new Set(Object.keys(registeredGroups)),
   );
 
-  // Wrap onOutput to track session ID from streamed results
+  // Wrap onOutput to track session ID from streamed results (success only)
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
-        if (output.newSessionId) {
+        if (output.newSessionId && output.status !== 'error') {
           sessions[group.folder] = output.newSessionId;
           setSession(group.folder, output.newSessionId);
         }
@@ -321,17 +322,23 @@ async function runAgent(
       wrappedOnOutput,
     );
 
-    if (output.newSessionId) {
-      sessions[group.folder] = output.newSessionId;
-      setSession(group.folder, output.newSessionId);
-    }
-
     if (output.status === 'error') {
+      // Clear the session on error so the next run starts fresh instead of
+      // retrying a broken/stale session in an infinite loop.
+      if (sessions[group.folder]) {
+        delete sessions[group.folder];
+        deleteSession(group.folder);
+      }
       logger.error(
         { group: group.name, error: output.error },
         'Container agent error',
       );
       return 'error';
+    }
+
+    if (output.newSessionId) {
+      sessions[group.folder] = output.newSessionId;
+      setSession(group.folder, output.newSessionId);
     }
 
     return 'success';
