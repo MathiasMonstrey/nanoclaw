@@ -42,7 +42,6 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   imageAttachments?: Array<{ relativePath: string; mediaType: string }>;
-
 }
 
 export interface ContainerOutput {
@@ -172,7 +171,12 @@ function buildVolumeMounts(
   });
 
   // Mount per-group .claude.json (holds MCP server config keyed by project path)
-  const claudeJsonFile = path.join(DATA_DIR, 'sessions', group.folder, 'claude.json');
+  const claudeJsonFile = path.join(
+    DATA_DIR,
+    'sessions',
+    group.folder,
+    'claude.json',
+  );
   if (fs.existsSync(claudeJsonFile)) {
     mounts.push({
       hostPath: claudeJsonFile,

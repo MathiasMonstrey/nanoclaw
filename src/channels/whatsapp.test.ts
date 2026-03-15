@@ -31,7 +31,12 @@ vi.mock('../db.js', () => ({
 // Mock image module
 vi.mock('../image.js', () => ({
   isImageMessage: vi.fn().mockReturnValue(false),
-  processImage: vi.fn().mockResolvedValue({ content: '[Image: attachments/test.jpg]', relativePath: 'attachments/test.jpg' }),
+  processImage: vi
+    .fn()
+    .mockResolvedValue({
+      content: '[Image: attachments/test.jpg]',
+      relativePath: 'attachments/test.jpg',
+    }),
 }));
 
 // Mock fs
@@ -93,9 +98,6 @@ vi.mock('@whiskeysockets/baileys', () => {
       timedOut: 408,
       restartRequired: 515,
     },
-    downloadMediaMessage: vi
-      .fn()
-      .mockResolvedValue(Buffer.from('pdf-data')),
     fetchLatestWaWebVersion: vi
       .fn()
       .mockResolvedValue({ version: [2, 3000, 0] }),
