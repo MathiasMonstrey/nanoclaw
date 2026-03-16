@@ -13,6 +13,8 @@ import {
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   GROUPS_DIR,
+  HA_TOKEN,
+  HA_URL,
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
@@ -214,8 +216,16 @@ function buildVolumeMounts(
     group.folder,
     'agent-runner-src',
   );
-  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
-    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+  // Always sync core source files from main so host-side updates take effect.
+  // Extra files added by agents are preserved (only files present in main source are overwritten).
+  if (fs.existsSync(agentRunnerSrc)) {
+    fs.mkdirSync(groupAgentRunnerDir, { recursive: true });
+    for (const file of fs.readdirSync(agentRunnerSrc)) {
+      fs.copyFileSync(
+        path.join(agentRunnerSrc, file),
+        path.join(groupAgentRunnerDir, file),
+      );
+    }
   }
   mounts.push({
     hostPath: groupAgentRunnerDir,
@@ -263,8 +273,8 @@ function buildContainerArgs(
   }
 
   // Pass Home Assistant credentials if configured
-  if (process.env.HA_URL) args.push('-e', `HA_URL=${process.env.HA_URL}`);
-  if (process.env.HA_TOKEN) args.push('-e', `HA_TOKEN=${process.env.HA_TOKEN}`);
+  if (HA_URL) args.push('-e', `HA_URL=${HA_URL}`);
+  if (HA_TOKEN) args.push('-e', `HA_TOKEN=${HA_TOKEN}`);
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
