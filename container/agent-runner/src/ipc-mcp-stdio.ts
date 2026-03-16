@@ -9,6 +9,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import fs from 'fs';
 import path from 'path';
+import https from 'https';
+import http from 'http';
 import { CronExpressionParser } from 'cron-parser';
 
 const IPC_DIR = '/workspace/ipc';
@@ -330,6 +332,68 @@ Use available_groups.json to find the JID for a group. The folder name must be c
     return {
       content: [{ type: 'text' as const, text: `Group "${args.name}" registered. It will start receiving messages immediately.` }],
     };
+  },
+);
+
+const HA_URL = process.env.HA_URL;
+const HA_TOKEN = process.env.HA_TOKEN;
+
+const DEFAULT_CALENDARS = [
+  'calendar.gezin',
+  'calendar.mathias_monstrey_gmail_com',
+  'calendar.liza',
+  'calendar.mathias_en_liza',
+  'calendar.kuisagenda',
+  'calendar.verjaardagen',
+  'calendar.wat_eten_we',
+];
+
+function haFetch(urlStr: string, token: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(urlStr);
+    const lib = parsed.protocol === 'https:' ? https : http;
+    const req = lib.request(urlStr, {
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => resolve(data));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+server.tool(
+  'get_calendar_events',
+  'Fetch calendar events from Home Assistant for a given date range. Returns events grouped by calendar.',
+  {
+    start: z.string().describe('Start of the range as ISO 8601 timestamp (e.g. "2026-03-16T00:00:00Z")'),
+    end: z.string().describe('End of the range as ISO 8601 timestamp (e.g. "2026-03-17T00:00:00Z")'),
+    calendars: z.array(z.string()).optional().describe('List of calendar entity IDs (e.g. ["calendar.gezin"]). Defaults to all configured calendars.'),
+  },
+  async (args) => {
+    if (!HA_URL || !HA_TOKEN) {
+      return {
+        content: [{ type: 'text' as const, text: 'Home Assistant not configured. HA_URL and HA_TOKEN must be set.' }],
+        isError: true,
+      };
+    }
+
+    const calendars = args.calendars && args.calendars.length > 0 ? args.calendars : DEFAULT_CALENDARS;
+    const result: Record<string, unknown> = {};
+
+    await Promise.all(calendars.map(async (calId) => {
+      try {
+        const url = `${HA_URL}/api/calendars/${encodeURIComponent(calId)}?start=${encodeURIComponent(args.start)}&end=${encodeURIComponent(args.end)}`;
+        const body = await haFetch(url, HA_TOKEN!);
+        result[calId] = JSON.parse(body);
+      } catch (err) {
+        result[calId] = { error: err instanceof Error ? err.message : String(err) };
+      }
+    }));
+
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   },
 );
 

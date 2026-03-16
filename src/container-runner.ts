@@ -262,6 +262,10 @@ function buildContainerArgs(
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
+  // Pass Home Assistant credentials if configured
+  if (process.env.HA_URL) args.push('-e', `HA_URL=${process.env.HA_URL}`);
+  if (process.env.HA_TOKEN) args.push('-e', `HA_TOKEN=${process.env.HA_TOKEN}`);
+
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
 
