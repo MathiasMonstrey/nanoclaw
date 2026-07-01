@@ -110,11 +110,19 @@ export interface QueryInput {
   imageAttachments?: Array<{ localPath: string; mediaType: string }>;
 }
 
-export interface McpServerConfig {
+export interface McpStdioServerConfig {
   command: string;
   args: string[];
   env: Record<string, string>;
 }
+
+export interface McpRemoteServerConfig {
+  type: 'http' | 'sse';
+  url: string;
+  headers?: Record<string, string>;
+}
+
+export type McpServerConfig = McpStdioServerConfig | McpRemoteServerConfig;
 
 export interface AgentQuery {
   /** Push a follow-up message into the active query. */

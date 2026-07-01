@@ -23,6 +23,8 @@
 
 import fs from 'fs';
 import path from 'path';
+
+import type { McpServerConfig } from './providers/types.js';
 import { fileURLToPath } from 'url';
 
 import { loadConfig } from './config.js';
@@ -74,7 +76,7 @@ async function main(): Promise<void> {
   const mcpServerPath = path.join(__dirname, 'mcp-tools', 'index.ts');
 
   // Build MCP servers config: nanoclaw built-in + any from container.json
-  const mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }> = {
+  const mcpServers: Record<string, McpServerConfig> = {
     nanoclaw: {
       command: 'bun',
       args: ['run', mcpServerPath],
@@ -82,9 +84,24 @@ async function main(): Promise<void> {
     },
   };
 
+  // Home Assistant MCP server (fork): wire the agent to HA's native MCP
+  // endpoint so it gets real tools (turn_on, call_service, list entities).
+  // HA_URL/HA_TOKEN are injected into the container by the host container-runner.
+  const haUrl = process.env.HA_URL;
+  const haToken = process.env.HA_TOKEN;
+  if (haUrl && haToken) {
+    mcpServers['homeassistant'] = {
+      type: 'http',
+      url: `${haUrl.replace(/\/+$/, '')}/api/mcp`,
+      headers: { Authorization: `Bearer ${haToken}` },
+    };
+    log('Additional MCP server: homeassistant (http)');
+  }
+
   for (const [name, serverConfig] of Object.entries(config.mcpServers)) {
     mcpServers[name] = serverConfig;
-    log(`Additional MCP server: ${name} (${serverConfig.command})`);
+    const desc = 'command' in serverConfig ? serverConfig.command : `${serverConfig.type} ${serverConfig.url}`;
+    log(`Additional MCP server: ${name} (${desc})`);
   }
 
   const provider = createProvider(providerName, {

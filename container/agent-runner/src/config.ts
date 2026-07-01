@@ -1,3 +1,4 @@
+import type { McpServerConfig } from './providers/types.js';
 /**
  * Runner config — reads /workspace/agent/container.json at startup.
  *
@@ -15,7 +16,7 @@ export interface RunnerConfig {
   groupName: string;
   agentGroupId: string;
   maxMessagesPerPrompt: number;
-  mcpServers: Record<string, { command: string; args: string[]; env: Record<string, string> }>;
+  mcpServers: Record<string, McpServerConfig>;
   model?: string;
   effort?: string;
 }
