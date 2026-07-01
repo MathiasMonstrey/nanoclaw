@@ -764,8 +764,20 @@ registerChannelAdapter('whatsapp', {
             // filter is correct since the user's phone messages shouldn't wake
             // the agent in third-party conversations.
             if (fromMe) {
+              // Echo suppression. Two topologies:
+              //  - Dedicated bot number (ASSISTANT_HAS_OWN_NUMBER): any fromMe
+              //    message outside self-chat is the bot's own send in a third-
+              //    party chat — drop it.
+              //  - Shared number (bot runs on the user's own number): the user's
+              //    own messages are ALSO fromMe, so we must NOT blanket-drop them
+              //    or the bot can never be addressed in a group. Instead drop only
+              //    the bot's own echoes, identified by sentMessageCache (ids we
+              //    sent) — the downstream agent-wake filter additionally ignores
+              //    the "Name:" prefixed echoes. Unwired groups still no-op at the
+              //    router (no messaging_group / no wired agent), so this does not
+              //    make the bot respond across the user's other group chats.
               const isSelfChat = botPhoneJid && chatJid === botPhoneJid;
-              if (!isSelfChat) continue;
+              if (ASSISTANT_HAS_OWN_NUMBER && !isSelfChat) continue;
               if (sentMessageCache.has(msg.key.id || '')) continue;
             }
 
