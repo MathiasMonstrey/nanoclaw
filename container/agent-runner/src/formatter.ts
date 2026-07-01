@@ -256,7 +256,7 @@ function formatAttachments(attachments: any[] | undefined): string {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parseContent(json: string): any {
+export function parseContent(json: string): any {
   try {
     return JSON.parse(json);
   } catch {

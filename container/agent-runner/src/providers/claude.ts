@@ -68,9 +68,22 @@ function mcpAllowPattern(serverName: string): string {
   return `mcp__${serverName.replace(/[^a-zA-Z0-9_-]/g, '_')}__*`;
 }
 
+type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+
+type ContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: ImageMediaType; data: string } };
+
+const SUPPORTED_IMAGE_MEDIA_TYPES: readonly ImageMediaType[] = [
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+];
+
 interface SDKUserMessage {
   type: 'user';
-  message: { role: 'user'; content: string };
+  message: { role: 'user'; content: string | ContentBlock[] };
   parent_tool_use_id: null;
   session_id: string;
 }
@@ -87,6 +100,16 @@ class MessageStream {
     this.queue.push({
       type: 'user',
       message: { role: 'user', content: text },
+      parent_tool_use_id: null,
+      session_id: '',
+    });
+    this.waiting?.();
+  }
+
+  pushMultimodal(content: ContentBlock[]): void {
+    this.queue.push({
+      type: 'user',
+      message: { role: 'user', content },
       parent_tool_use_id: null,
       session_id: '',
     });
@@ -393,6 +416,23 @@ export class ClaudeProvider implements AgentProvider {
   query(input: QueryInput): AgentQuery {
     const stream = new MessageStream();
     stream.push(input.prompt);
+
+    if (input.imageAttachments?.length) {
+      const blocks: ContentBlock[] = [];
+      for (const img of input.imageAttachments) {
+        const imgPath = path.join('/workspace', img.localPath);
+        try {
+          const data = fs.readFileSync(imgPath).toString('base64');
+          const mediaType = SUPPORTED_IMAGE_MEDIA_TYPES.includes(img.mediaType as ImageMediaType)
+            ? (img.mediaType as ImageMediaType)
+            : 'image/jpeg';
+          blocks.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data } });
+        } catch (err) {
+          log(`Failed to load image attachment: ${imgPath} (${err instanceof Error ? err.message : String(err)})`);
+        }
+      }
+      if (blocks.length > 0) stream.pushMultimodal(blocks);
+    }
 
     const instructions = input.systemContext?.instructions;
 

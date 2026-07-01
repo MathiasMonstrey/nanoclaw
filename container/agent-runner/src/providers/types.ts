@@ -101,6 +101,13 @@ export interface QueryInput {
   systemContext?: {
     instructions?: string;
   };
+
+  /**
+   * Image attachments to send as multimodal content blocks (fork: image-vision).
+   * Each localPath is relative to /workspace inside the container (e.g.
+   * "inbox/<messageId>/<file>"); the provider reads and base64-encodes it.
+   */
+  imageAttachments?: Array<{ localPath: string; mediaType: string }>;
 }
 
 export interface McpServerConfig {

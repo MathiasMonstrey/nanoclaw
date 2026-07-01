@@ -11,8 +11,7 @@ import {
   isClearCommand,
   isRunnerCommand,
   stripInternalTags,
-  type RoutingContext,
-} from './formatter.js';
+  type RoutingContext, parseContent } from './formatter.js';
 import { isUploadTraceCommand, uploadTrace } from './upload-trace.js';
 import type { AgentProvider, AgentQuery, ProviderEvent, ProviderExchange } from './providers/types.js';
 
@@ -225,11 +224,14 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
 
     log(`Processing ${keep.length} message(s), kinds: ${[...new Set(keep.map((m) => m.kind))].join(',')}`);
 
+    const imageAttachments = extractImageAttachments(keep);
+
     const query = config.provider.query({
       prompt,
       continuation,
       cwd: config.cwd,
       systemContext: config.systemContext,
+      ...(imageAttachments.length > 0 && { imageAttachments }),
     });
 
     // Process the query while concurrently polling for new messages
@@ -291,6 +293,21 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
  * passthrough commands are sent raw (no XML wrapping) so the SDK can
  * dispatch them. Otherwise they fall through to standard XML formatting.
  */
+function extractImageAttachments(messages: MessageInRow[]): Array<{ localPath: string; mediaType: string }> {
+  const out: Array<{ localPath: string; mediaType: string }> = [];
+  for (const msg of messages) {
+    const content = parseContent(msg.content);
+    const atts = content?.attachments;
+    if (!Array.isArray(atts)) continue;
+    for (const a of atts) {
+      if (a && a.type === 'image' && typeof a.localPath === 'string') {
+        out.push({ localPath: a.localPath, mediaType: a.mediaType || 'image/jpeg' });
+      }
+    }
+  }
+  return out;
+}
+
 function formatMessagesWithCommands(messages: MessageInRow[], nativeSlashCommands: boolean): string {
   const parts: string[] = [];
   const normalBatch: MessageInRow[] = [];
