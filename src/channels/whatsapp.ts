@@ -806,6 +806,11 @@ registerChannelAdapter('whatsapp', {
             // isBotMentionedInGroup(); short version is contextInfo.mentionedJid
             // on text + caption-bearing messages, matched against the bot's
             // phone JID and LID (#2560).
+            // Group-only assistant (fork): ignore direct messages entirely so the
+            // bot never auto-creates DM channels or spams the owner with
+            // "New direct message" approval prompts. Darcy only lives in groups.
+            if (!isGroup) continue;
+
             const botMentionedInGroup = isGroup && isBotMentionedInGroup(normalized, botPhoneJid, botLidUser);
 
             const inbound: InboundMessage = {
