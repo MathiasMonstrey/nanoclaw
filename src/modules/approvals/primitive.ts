@@ -23,7 +23,12 @@
  */
 import { normalizeOptions, type RawOption } from '../../channels/ask-question.js';
 import { getMessagingGroup } from '../../db/messaging-groups.js';
-import { createPendingApproval, getSession } from '../../db/sessions.js';
+import {
+  createPendingApproval,
+  deletePendingApproval,
+  getSession,
+  setPendingApprovalPlatformMessageId,
+} from '../../db/sessions.js';
 import { getDeliveryAdapter } from '../../delivery.js';
 import { wakeContainer } from '../../container-runner.js';
 import { log } from '../../log.js';
@@ -38,6 +43,17 @@ import { ensureUserDm } from '../permissions/user-dm.js';
  * as a one-line reason relayed to the requesting agent. See reason-capture.ts.
  */
 export const REJECT_WITH_REASON_VALUE = 'reject_with_reason';
+
+/**
+ * How long a module approval card stays actionable before the host sweep
+ * expires it and unblocks the requesting agent.
+ *
+ * Rows used to be written with `expires_at` null, which meant nothing ever
+ * reclaimed them: an approval the admin never saw (undelivered card, DM muted,
+ * approver left) parked the agent indefinitely. A bounded TTL turns that into
+ * a normal reject the agent can react to.
+ */
+export const APPROVAL_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Three-button approval UI. Plain Reject is the instant fast path; "Reject with
@@ -239,8 +255,23 @@ export async function requestApproval(opts: RequestApprovalOptions): Promise<voi
     return;
   }
 
+  const adapter = getDeliveryAdapter();
+  if (!adapter) {
+    // No delivery adapter means the card can never reach anyone. Recording a
+    // row here would strand the agent on an approval nobody can ever click.
+    log.error('No delivery adapter — cannot request approval', { action, agentName });
+    notifyAgent(session, `${action} failed: no delivery adapter configured to send the approval request.`);
+    return;
+  }
+
   const approvalId = `appr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const normalizedOptions = normalizeOptions(APPROVAL_OPTIONS);
+
+  // Record the row BEFORE delivering so a fast click can't race the insert,
+  // and stamp the routing columns we already know. Leaving channel_type /
+  // platform_id / agent_group_id null (the old behavior) produced rows the
+  // expiry sweep and card editor could not act on — an undeliverable approval
+  // then hung the requesting agent forever.
   createPendingApproval({
     approval_id: approvalId,
     session_id: session.id,
@@ -248,33 +279,47 @@ export async function requestApproval(opts: RequestApprovalOptions): Promise<voi
     action,
     payload: JSON.stringify(payload),
     created_at: new Date().toISOString(),
+    agent_group_id: session.agent_group_id,
+    channel_type: target.messagingGroup.channel_type,
+    platform_id: target.messagingGroup.platform_id,
+    expires_at: new Date(Date.now() + APPROVAL_TTL_MS).toISOString(),
     title,
     options_json: JSON.stringify(normalizedOptions),
     approver_user_id: approverUserId ?? null,
   });
 
-  const adapter = getDeliveryAdapter();
-  if (adapter) {
-    try {
-      await adapter.deliver(
-        target.messagingGroup.channel_type,
-        target.messagingGroup.platform_id,
-        null,
-        'chat-sdk',
-        JSON.stringify({
-          type: 'ask_question',
-          questionId: approvalId,
-          title,
-          question,
-          options: APPROVAL_OPTIONS,
-        }),
-      );
-    } catch (err) {
-      log.error('Failed to deliver approval card', { action, approvalId, err });
-      notifyAgent(session, `${action} failed: could not deliver approval request to ${target.userId}.`);
-      return;
-    }
+  let platformMessageId: string | undefined;
+  try {
+    platformMessageId = await adapter.deliver(
+      target.messagingGroup.channel_type,
+      target.messagingGroup.platform_id,
+      null,
+      'chat-sdk',
+      JSON.stringify({
+        type: 'ask_question',
+        questionId: approvalId,
+        title,
+        question,
+        options: APPROVAL_OPTIONS,
+      }),
+    );
+  } catch (err) {
+    // Drop the row: an approval whose card never landed is unresolvable, and
+    // leaving it 'pending' is exactly the deadlock this function must avoid.
+    deletePendingApproval(approvalId);
+    log.error('Failed to deliver approval card', { action, approvalId, err });
+    notifyAgent(session, `${action} failed: could not deliver approval request to ${target.userId}.`);
+    return;
   }
 
-  log.info('Approval requested', { action, approvalId, agentName, approver: target.userId });
+  if (platformMessageId) setPendingApprovalPlatformMessageId(approvalId, platformMessageId);
+
+  log.info('Approval requested', {
+    action,
+    approvalId,
+    agentName,
+    approver: target.userId,
+    channelType: target.messagingGroup.channel_type,
+    platformId: target.messagingGroup.platform_id,
+  });
 }

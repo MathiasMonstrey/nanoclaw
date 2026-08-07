@@ -186,6 +186,47 @@ export function updatePendingApprovalStatus(approvalId: string, status: PendingA
 }
 
 /**
+ * Stamp the platform message id of a delivered approval card. Written after
+ * the send returns so the expiry sweep can edit the card in place instead of
+ * leaving a live-looking button on a row that no longer exists.
+ */
+export function setPendingApprovalPlatformMessageId(approvalId: string, platformMessageId: string): void {
+  getDb()
+    .prepare('UPDATE pending_approvals SET platform_message_id = ? WHERE approval_id = ?')
+    .run(platformMessageId, approvalId);
+}
+
+/**
+ * Approvals still in `pending` whose TTL has elapsed. Distinct from
+ * `getExpiredAwaitingReasonApprovals`, which covers the reject-with-reason
+ * hold — this one reclaims cards the admin simply never answered (or never
+ * received). Rows written before the TTL existed have `expires_at` null and
+ * are intentionally excluded; the sweep backfills them via
+ * `getPendingApprovalsMissingExpiry` before running this query.
+ */
+export function getExpiredPendingApprovals(nowIso: string): PendingApproval[] {
+  return getDb()
+    .prepare("SELECT * FROM pending_approvals WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at <= ?")
+    .all(nowIso) as PendingApproval[];
+}
+
+/**
+ * Pending approvals with no deadline at all. Only legacy rows match: since
+ * approvals gained a TTL, `requestApproval` always stamps one. Returned so the
+ * sweep can derive each row's deadline from its own `created_at` rather than
+ * granting a fresh full TTL to a row that has already been stuck for days.
+ */
+export function getPendingApprovalsMissingExpiry(): PendingApproval[] {
+  return getDb()
+    .prepare("SELECT * FROM pending_approvals WHERE status = 'pending' AND expires_at IS NULL")
+    .all() as PendingApproval[];
+}
+
+export function setPendingApprovalExpiry(approvalId: string, expiresAt: string): void {
+  getDb().prepare('UPDATE pending_approvals SET expires_at = ? WHERE approval_id = ?').run(expiresAt, approvalId);
+}
+
+/**
  * Park an approval in the "rejected, awaiting reason" hold: the admin clicked
  * "Reject with reason…" and we're waiting for their one-line reply. `expiresAt`
  * is the deadline after which the host sweep finalizes a plain reject (so a

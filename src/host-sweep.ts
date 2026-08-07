@@ -164,6 +164,19 @@ async function sweep(): Promise<void> {
   }
   // MODULE-HOOK:approvals-reason-sweep:end
 
+  // Expire approval cards nobody ever answered. Same shape as the hold sweep:
+  // one central-DB scan per tick. Without it an approval that never reached a
+  // human (undelivered card, muted DM, approver gone) parks the requesting
+  // agent indefinitely.
+  // MODULE-HOOK:approvals-expiry-sweep:start
+  try {
+    const { sweepExpiredApprovals } = await import('./modules/approvals/index.js');
+    await sweepExpiredApprovals();
+  } catch (err) {
+    log.error('Approval expiry sweep failed', { err });
+  }
+  // MODULE-HOOK:approvals-expiry-sweep:end
+
   setTimeout(sweep, SWEEP_INTERVAL_MS);
 }
 
