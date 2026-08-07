@@ -222,6 +222,14 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
     // provider natively handles slash commands), others get XML.
     const prompt = formatMessagesWithCommands(keep, config.provider.supportsNativeSlashCommands);
 
+    // A native slash command in the batch is passed to the SDK raw, and the
+    // SDK answers it as bare text ("Unknown command: /ja", a /cost report, …)
+    // with no <message to="..."> envelope. That used to be logged as scratchpad
+    // and silently dropped, so a user who typed a bad command got no reply at
+    // all. Flag the batch so processQuery delivers that text verbatim.
+    const batchHasNativeCommand =
+      config.provider.supportsNativeSlashCommands && keep.some((m) => isRunnerCommand(m));
+
     log(`Processing ${keep.length} message(s), kinds: ${[...new Set(keep.map((m) => m.kind))].join(',')}`);
 
     const imageAttachments = extractImageAttachments(keep);
@@ -249,6 +257,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         config.provider.onExchangeComplete?.bind(config.provider),
         prompt,
         continuation,
+        batchHasNativeCommand,
       );
       if (result.continuation && result.continuation !== continuation) {
         continuation = result.continuation;
@@ -348,6 +357,7 @@ export async function processQuery(
   onExchangeComplete: ((exchange: ProviderExchange) => void) | undefined,
   initialPrompt: string,
   initialContinuation: string | undefined,
+  batchHasNativeCommand = false,
 ): Promise<QueryResult> {
   let queryContinuation: string | undefined;
   let done = false;
@@ -499,18 +509,31 @@ export async function processQuery(
         // at all — either way the turn is finished.
         markCompleted(initialBatchIds);
         if (event.text) {
-          const { sent, hasUnwrapped } = dispatchResultText(event.text, routing);
+          const { sent, hasUnwrapped, scratchpad } = dispatchResultText(event.text, routing);
           if (sent === 0 && event.isError === true) {
             // Non-retryable error turn (e.g. a 403 billing_error) with no
             // <message> envelope: deliver the notice instead of dropping it as
             // scratchpad, and skip the re-wrap nudge — it would just re-hammer
             // the failing gateway turn after turn.
-            deliverErrorResult(event.text, routing);
+            deliverUnwrappedResult(event.text, routing, 'error result');
             notifyExchangeComplete(onExchangeComplete, {
               prompt: archivePrompts[0] ?? initialPrompt,
               result: event.text,
               continuation: queryContinuation ?? initialContinuation,
               status: 'error',
+            });
+            archivePrompts.shift();
+          } else if (sent === 0 && hasUnwrapped && batchHasNativeCommand) {
+            // Slash-command output from the SDK. Nudging for <message> wrapping
+            // is pointless here (the SDK, not the agent, produced this text) and
+            // dropping it leaves the user staring at silence after a typo like
+            // "/ja". Deliver it as-is.
+            deliverUnwrappedResult(scratchpad, routing, 'slash command output');
+            notifyExchangeComplete(onExchangeComplete, {
+              prompt: archivePrompts[0] ?? initialPrompt,
+              result: event.text,
+              continuation: queryContinuation ?? initialContinuation,
+              status: 'completed',
             });
             archivePrompts.shift();
           } else {
@@ -590,14 +613,23 @@ function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
 }
 
 /**
- * Deliver a turn's text straight to the channel the batch arrived on. Used when
- * a turn ends in a provider error (e.g. a non-retryable 403 billing_error) with
- * no <message> envelope: the notice would otherwise be dropped as scratchpad.
- * This is the same user-facing write the outer catch block does, minus the
- * `Error:` prefix — the provider's text is already a user-facing message.
+ * Deliver a turn's text straight to the channel the batch arrived on. Used for
+ * the two cases where bare, unwrapped text is legitimately user-facing and must
+ * not be swallowed as scratchpad:
+ *
+ *   - a turn that ended in a provider error (e.g. a non-retryable 403
+ *     billing_error) carrying a notice instead of a <message> envelope;
+ *   - output the SDK itself produced for a native slash command ("Unknown
+ *     command: /ja", a /cost report), which the agent never had a chance to
+ *     wrap.
+ *
+ * Same write the outer catch block does, minus the `Error:` prefix — the text is
+ * already user-facing.
  */
-function deliverErrorResult(text: string, routing: RoutingContext): void {
-  log('Error result with no <message> envelope — delivering to channel');
+function deliverUnwrappedResult(text: string, routing: RoutingContext, reason: string): void {
+  const body = text.trim();
+  if (!body) return;
+  log(`Unwrapped result (${reason}) — delivering to channel`);
   writeMessageOut({
     id: generateId(),
     in_reply_to: routing.inReplyTo,
@@ -605,7 +637,7 @@ function deliverErrorResult(text: string, routing: RoutingContext): void {
     platform_id: routing.platformId,
     channel_type: routing.channelType,
     thread_id: routing.threadId,
-    content: JSON.stringify({ text }),
+    content: JSON.stringify({ text: body }),
   });
 }
 
@@ -617,7 +649,10 @@ function deliverErrorResult(text: string, routing: RoutingContext): void {
  * The agent must always wrap output in <message to="name">...</message>
  * blocks, even with a single destination. Bare text is scratchpad only.
  */
-function dispatchResultText(text: string, routing: RoutingContext): { sent: number; hasUnwrapped: boolean } {
+function dispatchResultText(
+  text: string,
+  routing: RoutingContext,
+): { sent: number; hasUnwrapped: boolean; scratchpad: string } {
   const MESSAGE_RE = /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g;
 
   let match: RegExpExecArray | null;
@@ -656,7 +691,7 @@ function dispatchResultText(text: string, routing: RoutingContext): { sent: numb
   if (hasUnwrapped) {
     log(`WARNING: agent output had no <message to="..."> blocks — nothing was sent`);
   }
-  return { sent, hasUnwrapped };
+  return { sent, hasUnwrapped, scratchpad };
 }
 
 function sendToDestination(dest: DestinationEntry, body: string, routing: RoutingContext): void {

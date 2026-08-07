@@ -545,6 +545,72 @@ class InvalidSessionProvider {
   }
 }
 
+describe('poll loop — native slash command output', () => {
+  /**
+   * When the provider dispatches slash commands itself, the text it produces
+   * ("Unknown command: /ja", a /cost report) is the SDK talking, not the agent,
+   * so it never carries a <message to="..."> envelope. It used to be logged as
+   * scratchpad and dropped — a user who mistyped a command got total silence.
+   */
+  it('delivers unwrapped output for a native slash command', async () => {
+    insertMessage('m-cmd', { sender: 'Alice', text: '/ja' }, { platformId: 'chan-1', channelType: 'discord' });
+
+    const provider = new NativeCommandProvider({}, () => 'Unknown command: /ja');
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+
+    await waitFor(() => getUndeliveredMessages().length > 0, 2000);
+    controller.abort();
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0].content).text).toBe('Unknown command: /ja');
+    expect(out[0].platform_id).toBe('chan-1');
+    expect(out[0].channel_type).toBe('discord');
+
+    await loopPromise.catch(() => {});
+  });
+
+  it('still drops unwrapped output for an ordinary message', async () => {
+    insertMessage('m-plain', { sender: 'Alice', text: 'hello' }, { platformId: 'chan-1', channelType: 'discord' });
+
+    const provider = new NativeCommandProvider({}, () => 'thinking out loud');
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+
+    await sleep(1000);
+    controller.abort();
+
+    // Bare agent text stays scratchpad — the re-wrap nudge handles that path.
+    expect(getUndeliveredMessages()).toHaveLength(0);
+
+    await loopPromise.catch(() => {});
+  });
+
+  it('does not double-send when the command output is properly wrapped', async () => {
+    insertMessage('m-cmd2', { sender: 'Alice', text: '/cost' }, { platformId: 'chan-1', channelType: 'discord' });
+
+    const provider = new NativeCommandProvider({}, () => '<message to="discord-test">$1.23</message>');
+    const controller = new AbortController();
+    const loopPromise = runPollLoopWithTimeout(provider, controller.signal, 2000);
+
+    await waitFor(() => getUndeliveredMessages().length > 0, 2000);
+    await sleep(200);
+    controller.abort();
+
+    const out = getUndeliveredMessages();
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0].content).text).toBe('$1.23');
+
+    await loopPromise.catch(() => {});
+  });
+});
+
+/** MockProvider that claims native slash-command dispatch, like Claude Code. */
+class NativeCommandProvider extends MockProvider {
+  readonly supportsNativeSlashCommands = true;
+}
+
 describe('poll loop — slash command during active query', () => {
   it('aborts the active query when /clear arrives as a follow-up', async () => {
     insertMessage('m-active', { sender: 'Alice', text: 'long running request' }, { platformId: 'chan-1', channelType: 'discord' });
