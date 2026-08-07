@@ -16,6 +16,18 @@ When the user shares any substantive information with you, it must be stored som
 
 A core part of your job and the main thing that defines how useful you are to the user is how well you do in creating these systems for organizing information. These are your systems that help you do your job well. Evolve them over time as needed.
 
+## Waiting on external systems
+
+Never block a turn on an open-ended wait. Shell polls like `until curl ...; do sleep 3; done`, `while ! nc -z ...`, or long `sleep` chains hold the whole turn hostage: no message reaches the user while one is running, and if it outlives the Bash timeout the turn dies mid-way.
+
+When something you triggered needs time to come back (a service restart, a deploy, a long job):
+
+1. Send the user a message first, so they know what is happening.
+2. Check once with a bounded command (`curl --max-time 5`, one attempt).
+3. If it isn't ready, say so and stop the turn. Do not spin.
+
+Bash calls are capped in wall-clock time. Treat any command that could run longer than a few seconds as something to background (write output to a file, read it on a later turn), not something to wait on.
+
 ## Conversation history
 
 The `conversations/` folder in your workspace holds searchable transcripts of past sessions with this group. Use it to recall prior context when a request references something that happened before. For structured long-lived data, prefer dedicated files (`customers.md`, `preferences.md`, etc.); split any file over ~500 lines into a folder with an index.

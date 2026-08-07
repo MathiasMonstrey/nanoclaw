@@ -43,6 +43,21 @@ export const MAX_CONCURRENT_CONTAINERS = Math.max(1, parseInt(process.env.MAX_CO
 // Operators opt in: CONTAINER_CPU_LIMIT=2, CONTAINER_MEMORY_LIMIT=8g.
 export const CONTAINER_CPU_LIMIT = process.env.CONTAINER_CPU_LIMIT || '';
 export const CONTAINER_MEMORY_LIMIT = process.env.CONTAINER_MEMORY_LIMIT || '';
+// Wall-clock caps on the agent's Bash tool, passed into the container and read
+// by Claude Code. Without them a single `until curl ...; do sleep 3; done` can
+// block a turn until the host-sweep absolute ceiling (30 min) kills the whole
+// container, taking every queued message with it. The default bounds one call
+// to 2 min; a call may ask for more, but never past the 10 min max.
+// Both stay well under ABSOLUTE_CEILING_MS so the tool times out first and the
+// agent gets to react, instead of the container being SIGKILLed out from under it.
+export const BASH_DEFAULT_TIMEOUT_MS = Math.max(
+  1000,
+  parseInt(process.env.BASH_DEFAULT_TIMEOUT_MS || '120000', 10) || 120000,
+);
+export const BASH_MAX_TIMEOUT_MS = Math.max(
+  BASH_DEFAULT_TIMEOUT_MS,
+  parseInt(process.env.BASH_MAX_TIMEOUT_MS || '600000', 10) || 600000,
+);
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

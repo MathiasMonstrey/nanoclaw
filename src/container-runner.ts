@@ -10,6 +10,8 @@ import path from 'path';
 import { OneCLI } from '@onecli-sh/sdk';
 
 import {
+  BASH_DEFAULT_TIMEOUT_MS,
+  BASH_MAX_TIMEOUT_MS,
   CONTAINER_CPU_LIMIT,
   CONTAINER_IMAGE,
   CONTAINER_IMAGE_BASE,
@@ -447,6 +449,12 @@ async function buildContainerArgs(
   // Environment — only vars read by code we don't own.
   // Everything NanoClaw-specific is in container.json (read by runner at startup).
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Bash tool wall-clock caps (read by Claude Code inside the container).
+  // Bounds a single tool call so an unbounded poll loop can't consume the
+  // host-sweep ceiling and get the container SIGKILLed with its queue.
+  args.push('-e', `BASH_DEFAULT_TIMEOUT_MS=${BASH_DEFAULT_TIMEOUT_MS}`);
+  args.push('-e', `BASH_MAX_TIMEOUT_MS=${BASH_MAX_TIMEOUT_MS}`);
 
   // Home Assistant creds (fork): read by the get_calendar_events MCP tool
   // in the agent-runner. HA is reached directly (not via the OneCLI gateway),
